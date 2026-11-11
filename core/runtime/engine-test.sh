@@ -331,4 +331,19 @@ touch $R/data/hmgapi/mods/wa/.disabled $R/data/hmgapi/mods/wb/.disabled
 eng apply
 check "both off: feature gone" no "$([ -f $R/system/etc/permissions/android.hardware.wifi.xml ] && echo yes || echo no)"
 check "... state back" "" "$(grep persist.wifi.state $R/settings.txt)"
+# ---- two plans at once on a freshly installed feature mod (the app's onResume and onActivityResult
+# after the Updates screen): they share its .features files and the stage folder, so one waits for the other
+rm -f $R/data/hmgapi/mods/wa/.disabled $R/data/hmgapi/mods/wb/.disabled
+races=0
+for i in 1 2 3 4 5 6 7 8; do
+    rm -rf $R/data/hmgapi/mods/wa/.features $R/data/hmgapi/mods/wb/.features
+    (eng plan; echo "$rc $out" > $T/race) & a=$!
+    eng plan
+    wait $a || true
+    for r in "$rc $out" "$(cat $T/race)"; do
+        case "$r" in "0 "*) ;; *) races=$((races + 1)); echo "$r" | grep "error" ;; esac
+    done
+done
+check "two plans at once: no rename failure" 0 $races
+hasnt "... no temporary file left" ".tmp" "$(ls -a $R/data/hmgapi/mods/wa/.features)"
 exit $fail
