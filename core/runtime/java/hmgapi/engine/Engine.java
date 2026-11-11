@@ -149,11 +149,19 @@ public final class Engine {
     public static void main(String[] args) {
         Engine e = new Engine();
         int rc;
+        java.io.RandomAccessFile lock = null;
         try {
-            rc = e.run(args);
+            lock = e.lock();
+            rc = lock == null ? 1 : e.run(args);
         } catch (Throwable t) {
             e.out.add("engine error: " + t);
             rc = 1;
+        } finally {
+            try {
+                if (lock != null) lock.close();   // releases the lock
+            } catch (IOException x) {
+                // closed with the process anyway
+            }
         }
         if (!e.mirrors.isEmpty() || !e.restarts.isEmpty()) e.out.add("then    " + e.describeAfter());
         if (e.bindsChanged) e.out.add("then    binds (service restarts; adb may drop for a few seconds)");
@@ -165,6 +173,32 @@ public final class Engine {
             System.err.println("after: " + t);
         }
         System.exit(rc);
+    }
+
+    /** how long a run waits for another one to finish (an apply that rebuilds apps takes minutes) */
+    static final long LOCK_WAIT_MS = 15 * 60 * 1000;
+
+    /**
+     * One engine run at a time. They share the mods' generated files (.features), the stage
+     * folder and the state, and the app can start two at once: leaving the Updates screen runs
+     * `engine plan` from onActivityResult and again from onResume, and the second one failed
+     * with "rename ....tmp" or "rename stage/....work". The lock is held until the process
+     * ends or main() closes it, so a crashed run never leaves it taken. Null (with the reason
+     * in out) when another run is still busy after LOCK_WAIT_MS.
+     */
+    java.io.RandomAccessFile lock() throws IOException, InterruptedException {
+        stateDir.mkdirs();
+        java.io.RandomAccessFile f = new java.io.RandomAccessFile(new File(stateDir, "engine.lock"), "rw");
+        long end = System.currentTimeMillis() + LOCK_WAIT_MS;
+        while (true) {
+            if (f.getChannel().tryLock() != null) return f;
+            if (System.currentTimeMillis() > end) {
+                f.close();
+                out.add("another engine run is still busy; try again when it has finished");
+                return null;
+            }
+            Thread.sleep(200);
+        }
     }
 
     /** Live properties and service restarts, run after the result is printed. */
